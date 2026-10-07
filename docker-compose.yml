@@ -1,0 +1,83 @@
+name: sistema-monitoramento
+
+services:
+  # ---------------------------------------------------------------
+  # 1. APLICAÇÃO (Apache + PHP): serve o index.html e a api.php.
+  #    Antes chamava "frontend", mas ela também roda o backend PHP.
+  # ---------------------------------------------------------------
+  app:
+    build: ./docker/php          # php:apache + driver pdo_mysql
+    container_name: uepa_app
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    environment:
+      DB_HOST: db                # nome do serviço = hostname na rede interna
+      DB_NAME: ${MYSQL_DATABASE}
+      DB_USER: ${MYSQL_USER}     # usuário restrito, não o root
+      DB_PASS: ${MYSQL_PASSWORD}
+      TZ: America/Belem
+      DB_FILE: /var/www/data/campus_xv.sqlite   # banco FORA da pasta pública (guarda senhas e logs)
+    volumes:
+      - ./frontend:/var/www/html
+      - app_data:/var/www/data                  # volume Docker: sobrevive a rebuild e recriação
+    depends_on:
+      db:
+        condition: service_healthy   # só sobe quando o MySQL aceita conexões
+    networks:
+      - rede_campus
+
+  # ---------------------------------------------------------------
+  # 2. BANCO DE DADOS (MySQL): persistência dos dados do sistema.
+  # ---------------------------------------------------------------
+  db:
+    image: mysql:8.0
+    container_name: uepa_mysql
+    restart: unless-stopped
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: America/Belem
+    ports:
+      - "127.0.0.1:3306:3306"    # só acessível da própria máquina
+    volumes:
+      - db_data:/var/lib/mysql                       # dados sobrevivem a "down"/recriação
+      - ./database/init:/docker-entrypoint-initdb.d:ro  # .sql roda só na 1ª criação
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - rede_campus
+
+  # ---------------------------------------------------------------
+  # 3. phpMyAdmin: ferramenta de administração, só quando necessário.
+  #    Subir com:  docker compose --profile tools up -d
+  # ---------------------------------------------------------------
+  phpmyadmin:
+    image: phpmyadmin:5
+    container_name: uepa_phpmyadmin
+    restart: unless-stopped
+    profiles: ["tools"]
+    environment:
+      PMA_HOST: db
+      UPLOAD_LIMIT: 64M
+    ports:
+      - "127.0.0.1:8080:80"      # não exposto para a rede do campus
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - rede_campus
+
+volumes:
+  db_data:
+  app_data:
+
+networks:
+  rede_campus:
